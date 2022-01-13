@@ -1,5 +1,6 @@
 ////////미완성!!!!!!!!!!!!!/////////////////////////
 /*Socket서버*/
+
 #pragma comment(lib,"Ws2_32.lib")
 #include <iostream>
 #include <string>
@@ -7,16 +8,54 @@
 #include<winSock2.h> //socket의 관련된 함수를 사용하기위한 라이브러리
 #include <WS2tcpip.h>
 #include <thread>
+#include <mutex>
 using namespace std;
 
+#define PORT 20
 #define clinet_max 10
 #define buf_size 200
 int client_socket_num[clinet_max];
 int clint_num_count = 0;
 
+void client_recv(int cliSocket)
+{
+	int client_socket = cliSocket;
+	char buff[buf_size];
+	int recv_len = 0;
+	mutex mutex;
+	
+	while (1)
+	{
+		/* recv */
+		/*
+		  * retune 값
+		  - 수신 버퍼에 데이터가 도달한 경우
+		  : 버퍼에 복사한 후 실제 복사한 바이트 수를 리턴 합니다. 이 경우 recv() 함수의 리턴 값은 최소 1, 최대 len 이 됩니다.
+
+		  - 접속이 정상 종료한 경우
+		  : client가 closesocket() 함수를 호출해 접속을 종료하면, TCP 프로토콜 수준에서 접속 종료를 위한 패킷 교환 절차가 일어납니다. 이 경우 recv() 함수는 0을 리턴.
+			recv() 함수의 리턴 값이 0인 경우를 정상종료(normal close , graceful close)라고 부릅니다.
+		  : 비정상적으로 종료시 recv 함수의 리턴값이 -1로 반환
+
+		   * 인자
+		   - 데이터를 받은 클라이언트 소켓
+		   - 데이터를 받을 변수
+		   - 받는 데이터의 크기(byte)
+		   - 옵션
+		*/
+		recv_len = recv(client_socket, buff, sizeof(buff),0);
+		if (recv_len == -1) //client가 비정상적으로 종료
+		{
+			printf("client(%d) close", client_socket);
+			break;
+		}
+		cout << buff << endl;
+	}
+}
+
 int main()
 {
-	WSADATA wasData; //windows용 socket프로그래밍(원속)
+	WSADATA wasData; //windows용 socket프로그래밍(원속) /윈도우가 아닌 리눅스를 사용하게 되면 write,read와 같이 함수가 다르다
 	if (WSAStartup(MAKEWORD(2, 2), &wasData) != 0) //구조체 초기화 ,(,)->윈도우 버전??
 	{
 		cout << "윈도우 소켓 초기화 실패" << endl;
@@ -39,7 +78,7 @@ int main()
 		return 0;
 	}
 	else
-		cout << "serve 소켓 생성" << endl;
+		cout << "serve 소켓 생성" << servSocket <<endl;
 
 	/*소켓의 기본정보를 구조체로 정의->bind할 정보들*/
 	/* - 기본적으로 프로토콜을 사용할때는 PF_INET, address를 지정할때는 AF_INET사용
@@ -48,7 +87,7 @@ int main()
 	SOCKADDR_IN servAddress;
 	servAddress.sin_family = AF_INET; //IPv4를 사용함
 	servAddress.sin_addr.s_addr = htonl(INADDR_ANY);
-	servAddress.sin_port = htons(20);
+	servAddress.sin_port = htons(PORT);
 
 	//if (inet_pton(AF_INET, "165.229.185.206", &servAddress.sin_addr) != 1) //ip의 주소를 입력하고 해당 문자열 ip를 binary로 바꾼뒤 구조체의 ip주소에 할당
 	//{
@@ -107,42 +146,14 @@ int main()
 			return 0;
 		}
 		else
-			cout << "clint socket 연결 완료" << endl;
+			cout << "clint socket 연결 완료" << cliSocket << endl;
 
-		//client_socket_num[clint_num_count++] = cliSocket;
-		//여기서 원래 각각의 client마다 send, resev스래드 생성
-
-		/* recv */
-		/* 
-	      * retune 값 
-		  - 수신 버퍼에 데이터가 도달한 경우 
-	      : 버퍼에 복사한 후 실제 복사한 바이트 수를 리턴 합니다. 이 경우 recv() 함수의 리턴 값은 최소 1, 최대 len 이 됩니다.
-
-		  - 접속이 정상 종료한 경우 
-		  : clien가 closesocket() 함수를 호출해 접속을 종료하면, TCP 프로토콜 수준에서 접속 종료를 위한 패킷 교환 절차가 일어납니다. 이 경우 recv() 함수는 0을 리턴. 
-			recv() 함수의 리턴 값이 0인 경우를 정상종료(normal close , graceful close)라고 부릅니다.
-	      : 비정상적으로 종료시 recv 함수의 리턴값이 -1로 반환
-
-		   * 인자
-		   - 데이터를 받은 클라이언트 소켓
-		   - 데이터를 받을 변수
-		   - 받는 데이터의 크기(byte)
-		   - 옵션
-	    */
-		while (1)
-		{
-			recv_len = recv(cliSocket, buff, buf_size, 0);
-			//recv_len = recv(cliSocket, str.c_str(), str.length(), 0);
-			cout << recv_len << endl;
-			for (int i = 0; i < recv_len; i++)
-			{
-				cout << buff[i];
-			}
-			cout << endl;
-		}
-
+		client_socket_num[clint_num_count++] = cliSocket; //client가 늘어나면 그 수만큼 늘려준다.
+		thread thread_client(client_recv, cliSocket);
 
 	}
+
+
 	WSACleanup(); //원속 종료
 	return 0;
 }
