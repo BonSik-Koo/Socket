@@ -1,6 +1,4 @@
-////////미완성!!!!!!!!!!!!!/////////////////////////
-/*Socket서버*/
-
+/* Socket서버: 1:n 클라이언트 TCP통신 - 간단한 채팅프로그램*/
 #pragma comment(lib,"Ws2_32.lib")
 #include <iostream>
 #include <string>
@@ -9,24 +7,49 @@
 #include <WS2tcpip.h>
 #include <thread>
 #include <mutex>
+#include<Windows.h>
+#include<queue>
 using namespace std;
 
 #define PORT 20
-#define clinet_max 10
+#define client_max 10
 #define buf_size 200
-int client_socket_num[clinet_max];
-int clint_num_count = 0;
+int client_socket_num[client_max];
+int client_num_count = 0;
+mutex mt;
+queue<string> all_data;
 
-void client_recv(int cliSocket)
+void* send_client() //나중에 원하는 clint한테 지정해주어 데이터를 보내면 된다. 현재는 모든 client에게 전송.
 {
-	int client_socket = cliSocket;
-	char buff[buf_size];
-	int recv_len = 0;
-	mutex mutex;
-	
 	while (1)
 	{
-		/* recv */
+		if (!all_data.empty() && client_num_count != 0)
+		{
+			mt.lock();
+			for (int i = 0; i < all_data.size(); i++)
+			{
+				for (int j = 0; j < client_num_count; j++)
+				{
+					const char* msg = (all_data.front()).c_str();
+					send(client_socket_num[j], msg, strlen(msg), 0);
+				}
+				all_data.pop();
+			}
+			mt.unlock();
+		}	
+		else 
+			Sleep(100);
+	}
+	return NULL;
+}
+void* client_recv(int cliSocket) //client로 데이터를 받는 함수
+{
+	int client_socket = cliSocket;
+	char buff[buf_size] = { NULL };
+	int recv_len = 0;
+
+	while (1)
+	{	/* recv */
 		/*
 		  * retune 값
 		  - 수신 버퍼에 데이터가 도달한 경우
@@ -44,13 +67,38 @@ void client_recv(int cliSocket)
 		   - 옵션
 		*/
 		recv_len = recv(client_socket, buff, sizeof(buff),0);
-		if (recv_len == -1) //client가 비정상적으로 종료
+
+		if (recv_len == -1 || recv_len==0) //client가 비정상적으로 종료 = -1, 정상적으로 종료 = 0
 		{
-			printf("client(%d) close", client_socket);
+			mt.lock();
+			printf("client(%d) close",client_num_count);
+			mt.unlock();
 			break;
 		}
-		cout << buff << endl;
+		mt.lock();
+		all_data.push(buff);
+		mt.unlock();
+		Sleep(100);
 	}
+	
+	/*클라이언트 접속이 끊어진 경우*/
+	mt.lock();
+	closesocket(cliSocket);
+	for (int i = 0; i < client_num_count; i++) //클라이언트가 종료시 클라이언트를 관리하는배열에서 삭제후 땡기기
+	{
+		if (cliSocket == client_socket_num[i])
+		{
+			for (int j = i; j < client_num_count - 1; j++)
+			{
+				client_socket_num[j] = client_socket_num[j+1];
+			}
+			break;
+		}
+	}
+	client_num_count--;
+	mt.unlock();
+
+	return NULL;
 }
 
 int main()
@@ -70,7 +118,7 @@ int main()
 	   - Socket type -> SOCK_STREAM: TCP 프로토콜 통신 방법을 사용 / SOCK_DGRAM: UDP 프로토콜 통신 방법을 사용
 	   - "0"을 넣으면 자동적으로 2번째 인자에 맞추어 자동적으로 인자값을 지정 해줌 = IPPROTO_TCP*/
 	int  servSocket;
-	servSocket = socket(PF_INET, SOCK_STREAM, 0); //int??????Socket???????
+	servSocket = socket(PF_INET, SOCK_STREAM, 0);
 	if (servSocket == INVALID_SOCKET)
 	{
 		cout << "소켓 생성 실패" << endl;
@@ -88,13 +136,6 @@ int main()
 	servAddress.sin_family = AF_INET; //IPv4를 사용함
 	servAddress.sin_addr.s_addr = htonl(INADDR_ANY);
 	servAddress.sin_port = htons(PORT);
-
-	//if (inet_pton(AF_INET, "165.229.185.206", &servAddress.sin_addr) != 1) //ip의 주소를 입력하고 해당 문자열 ip를 binary로 바꾼뒤 구조체의 ip주소에 할당
-	//{
-	//	cout << "inet_pton" << endl;
-	//	WSACleanup(); //원속 종료
-	//	return 0;
-	//}
 
 	/*bind-생성한 소켓에 소켓 기본정보 구조체를 연결한다.*/
 	if (bind(servSocket, (SOCKADDR*)&servAddress, sizeof(servAddress)) == -1) //bind가 제대로 되지 않았을시 "-1"
@@ -121,38 +162,56 @@ int main()
 	SOCKADDR_IN clientAddr;
 	int cliSocket;
 	int clientAddr_len;
-	char buff[buf_size];
+	char buff[buf_size] = { NULL };
 	int recv_len=0;
-	//string str;
+	
+	thread thread_client_send(send_client); //recv한 데이터를 send하는 thread생성->1개만
+	thread_client_send.detach();
 
 	/*accept- */
 	while (1)
 	{
 		/*클라이언트 socket과 데이터를 주고받을 socket생성*/
-		/* 
-		   *socket은 두종류 
+		/*
+		   *socket은 두종류
 		   1) server소켓으로 clint를 처음 listen할때 사용
 		   2) clinet와 실질적으로 데이터를 주고받는 소켓->clint의 개수만큼 accept하여 소켓의 개수가 늘어난다.
 		   - clientAddr에 들어온 클라이언트의 소켓 정보(ip등)를 저장한다.
 		*/
 		clientAddr_len = sizeof(clientAddr);
-		cliSocket = accept(servSocket, (SOCKADDR*)&clientAddr, &clientAddr_len);  // int??????Socket???????
-		if (cliSocket == INVALID_SOCKET)
+		cliSocket = accept(servSocket, (SOCKADDR*)&clientAddr, &clientAddr_len); 
+		if (cliSocket == INVALID_SOCKET) //accept가 실패할경우 기존에 들어온 클라이언트가 있으면 계속 accept를 대기하고 없을시 main thread종료되게 하기
 		{
 			cout << "accept 실패";
-			closesocket(servSocket);//생선한 socket 반납
+			//closesocket(servSocket);//생선한 socket 반납
 			closesocket(cliSocket);//생선한 socket 반납
-			WSACleanup(); //원속 종료
-			return 0;
+			if (client_num_count == 0)
+			{
+				closesocket(servSocket);
+				break;
+			}
+			continue;
 		}
 		else
-			cout << "clint socket 연결 완료" << cliSocket << endl;
+		{
+			mt.lock();
+			client_socket_num[client_num_count++] = cliSocket; //접속한 client의 수 관리,client들에게 번호를 각각할당해준다.
+			cout << "clint socket ("<<cliSocket << ") 연결 완료\n";
+			mt.unlock();
+		}
 
-		client_socket_num[clint_num_count++] = cliSocket; //client가 늘어나면 그 수만큼 늘려준다.
-		thread thread_client(client_recv, cliSocket);
-
+		thread thread_client_recv(client_recv, cliSocket); //accept된 client와 recv하는 thread를 client가 들어올때마다 개별적으로 만들어준다.
+		/*기존: main_thread와 생성시킨 thread객체를 실행시키고 main thread에서 생성한 thread가 종료될때까지 기다리게 반드시 join()을 해주어야된다.
+		     + 예를 들어 자식 스레드가 아직 실행 중인데 부모 스레드가 return 0;에 도달하여 프로그램이 종료되는 경우이다. 
+			   기본적으로 메인 스레드가 종료되고도 자식 스레드가 계속 실행 중인 것은 비정상적인 상황으로 본다. 
+			   때문에 이 경우, 강제로 오류를 발생시킨다. 만약 이것이 정말 프로그래머가 의도한 경우라면 잠시 후 볼 detach() 함수를 사용해야 한다.
+			   또한 메인 thread가 종료되면 나머지 자식 스레드도 자동으로 반환후 종료된다.  */
+		thread_client_recv.detach(); 
+		mt.lock();
+		printf("thread_client create (%d)\n", cliSocket);
+		mt.unlock();
+		Sleep(100);
 	}
-
 
 	WSACleanup(); //원속 종료
 	return 0;
